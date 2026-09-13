@@ -1,6 +1,6 @@
 {
   "name": "karin-plugin-adapter-wxoc",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "dmmdekkd",
   "type": "module",
   "description": "Karin 微信个人号适配器 基于 ilink 协议",
