@@ -165,8 +165,17 @@ export class Manager {
     logger.mark(`[微信个人号] ${botId} 已下线: ${message}`)
   }
 
-  /** 扫码登录 */
-  async login (e: Message): Promise<boolean> {
+  /** 扫码登录 input 为序号时重登指定账号 保留其 botId 与数据 */
+  async login (e: Message, input?: string): Promise<boolean> {
+    let target: Account | undefined
+    if (input) {
+      target = this.findAccount(input.trim()).account
+      if (!target) {
+        await e.reply('未找到该账号，用 #微信账号列表 查看序号')
+        return false
+      }
+    }
+
     const client = new WechatClient({ cfg: config() })
 
     let qr: QRCodeResponse
@@ -206,7 +215,7 @@ export class Manager {
       const { bot_token: token, ilink_user_id: userId, ilink_bot_id: accountId, nickname, baseurl } = status
       if (!token || !userId) continue
 
-      const account = await this.#saveLogin({ ilink_user_id: userId, ilink_bot_id: accountId, bot_token: token, nickname, baseurl })
+      const account = await this.#saveLogin({ ilink_user_id: userId, ilink_bot_id: accountId, bot_token: token, nickname, baseurl }, target)
       const result = await this.connect(account)
       await e.reply(result.success
         ? `微信个人号登录成功: ${account.nickname}`
@@ -242,13 +251,14 @@ export class Manager {
     }
   }
 
-  /** 保存扫码登录结果 */
-  async #saveLogin (status: { ilink_user_id: string; ilink_bot_id?: string; bot_token: string; nickname?: string; baseurl?: string }): Promise<Account> {
+  /** 保存扫码登录结果 target 为指定重登的既有账号 保留其 botId 与数据 */
+  async #saveLogin (status: { ilink_user_id: string; ilink_bot_id?: string; bot_token: string; nickname?: string; baseurl?: string }, target?: Account): Promise<Account> {
     const accounts = config().accounts
-    const account = accounts.find(a => a.userId === status.ilink_user_id)
+    const account = target || accounts.find(a => a.userId === status.ilink_user_id)
 
     if (account) {
       account.token = status.bot_token
+      account.userId = status.ilink_user_id
       account.accountId = status.ilink_bot_id || account.accountId
       if (status.baseurl) account.baseUrl = status.baseurl
       account.isDisable = false
@@ -279,7 +289,7 @@ export class Manager {
       return `${index + 1}. ${account.nickname || account.botId} [${status}]\n   ${account.userId}`
     })
 
-    return `微信个人号账号列表:\n${list.join('\n')}\n\n指令: #微信登录 | #微信删除[序号] | #微信禁用/启用[序号]`
+    return `微信个人号账号列表:\n${list.join('\n')}\n\n指令: #微信登录 | #微信登录[序号] 重登 | #微信删除[序号] | #微信禁用/启用[序号]`
   }
 
   /** 删除账号 */

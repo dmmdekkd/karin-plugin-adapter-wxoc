@@ -2,8 +2,13 @@ import { checkPkgUpdate, logger, updatePkg } from 'node-karin'
 import { config } from '@/utils/config'
 import { dir } from '@/dir'
 
-/** 自动更新定时器 */
-let timer: NodeJS.Timeout | undefined
+/** 毫秒间隔转 cron 表达式（分 时 日 月 周） */
+export function toCron (ms: number): string {
+  if (ms < 3_600_000) return `*/${Math.max(1, Math.round(ms / 60_000))} * * * *`
+  const hours = ms / 3_600_000
+  if (hours <= 24) return `0 */${Math.max(1, Math.round(hours))} * * *`
+  return `0 0 */${Math.max(1, Math.round(hours / 24))} * *`
+}
 
 /** 检查更新 返回结果文本 */
 export async function checkUpdate (): Promise<string> {
@@ -26,21 +31,8 @@ export async function performUpdate (): Promise<{ text: string, needRestart: boo
   return { text: `更新失败: ${result.data}`, needRestart: false }
 }
 
-/** 按当前配置重建自动更新定时器 WebUI 保存配置后调用 */
-export function restartAutoUpdate (): void {
-  if (timer) clearInterval(timer)
-
-  const { autoUpdate, updateCheckInterval } = config()
-  if (!autoUpdate) return
-
-  timer = setInterval(() => {
-    void autoCheck()
-  }, updateCheckInterval)
-  timer.unref()
-}
-
 /** 自动检查并静默更新 更新成功仅打印日志提示重启 不自动重启 */
-async function autoCheck (): Promise<void> {
+export async function autoCheck (): Promise<void> {
   try {
     const result = await checkPkgUpdate(dir.name)
     if (result.status !== 'yes') return

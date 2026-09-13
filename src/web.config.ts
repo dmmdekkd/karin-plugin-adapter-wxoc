@@ -1,6 +1,5 @@
 import { components, defineConfig } from 'node-karin'
 import { config, saveConfig } from '@/utils/config'
-import { restartAutoUpdate } from '@/core/update'
 import { dir } from '@/dir'
 import type { Config } from '@/types'
 
@@ -170,8 +169,9 @@ export default defineConfig({
 
     saveConfig({ ...payload, accounts: normalized } as unknown as Partial<Config>)
 
-    /** 自动更新开关或间隔可能变更 重建定时器 */
-    restartAutoUpdate()
-    return { success: true, message: '保存成功喵 ~' }
+    /** 自动更新定时任务为启动时注册 开关或间隔变更需重启生效 */
+    const autoUpdateChanged = payload.autoUpdate !== undefined || payload.updateCheckInterval !== undefined
+    const message = autoUpdateChanged ? '保存成功喵 ~ 自动更新配置将在重启 Karin 后生效' : '保存成功喵 ~'
+    return { success: true, message }
   },
 })
