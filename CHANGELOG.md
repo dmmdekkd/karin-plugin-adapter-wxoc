@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.0...karin-plugin-adapter-wxoc-v1.0.1) (2026-09-13)
+
+
+### 🔧 杂项
+
+* 移除多余的release-as配置并更新机器人头像 ([9bfe7c1](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/commit/9bfe7c19d97e2cdcbb58b88b1bb3f9ae23604a90))
+
 ## [1.0.0](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.0...karin-plugin-adapter-wxoc-v1.0.0) (2026-09-13)
 
 
