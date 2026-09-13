@@ -1,6 +1,5 @@
 import { dir } from "./dir.js";
 import { n as saveConfig, t as config } from "./config-FiIQcMOG.js";
-import { r as restartAutoUpdate } from "./update-uQdzwqvT.js";
 import { components, defineConfig } from "node-karin";
 
 //#region src/web.config.ts
@@ -208,11 +207,12 @@ var web_config_default = defineConfig({
 			...payload,
 			accounts: normalized
 		});
-		/** 自动更新开关或间隔可能变更 重建定时器 */
-		restartAutoUpdate();
+		/** 自动更新定时任务为启动时注册 开关或间隔变更需重启生效 */
+		const autoUpdateChanged = payload.autoUpdate !== undefined || payload.updateCheckInterval !== undefined;
+		const message = autoUpdateChanged ? "保存成功喵 ~ 自动更新配置将在重启 Karin 后生效" : "保存成功喵 ~";
 		return {
 			success: true,
-			message: "保存成功喵 ~"
+			message
 		};
 	}
 });

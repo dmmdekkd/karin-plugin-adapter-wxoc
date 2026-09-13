@@ -1,10 +1,11 @@
-import { t as manager } from "../adapter-21xtijwT.js";
+import { t as manager } from "../adapter-CkuglFLk.js";
 import { karin } from "node-karin";
 
 //#region src/apps/account.ts
-/** #微信登录 或 #微信个人号登录 */
-const login = karin.command(/^#?微信(个人号)?登录$/, async (e) => {
-	await manager.login(e);
+/** #微信登录 或 #微信个人号登录 带序号时重登指定账号保留其数据 */
+const login = karin.command(/^#?微信(个人号)?登录(\s*\d+)?$/, async (e) => {
+	const input = (e.msg.match(/^#?微信(个人号)?登录(\s*\d+)?$/)?.[2] || "").trim();
+	await manager.login(e, input || undefined);
 	return true;
 }, {
 	name: "微信个人号登录",

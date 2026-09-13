@@ -1467,8 +1467,16 @@ var Manager = class {
 		await this.destroy(botId);
 		logger.mark(`[微信个人号] ${botId} 已下线: ${message}`);
 	}
-	/** 扫码登录 */
-	async login(e) {
+	/** 扫码登录 input 为序号时重登指定账号 保留其 botId 与数据 */
+	async login(e, input) {
+		let target;
+		if (input) {
+			target = this.findAccount(input.trim()).account;
+			if (!target) {
+				await e.reply("未找到该账号，用 #微信账号列表 查看序号");
+				return false;
+			}
+		}
 		const client = new WechatClient({ cfg: config() });
 		let qr;
 		try {
@@ -1507,7 +1515,7 @@ var Manager = class {
 				bot_token: token,
 				nickname,
 				baseurl
-			});
+			}, target);
 			const result = await this.connect(account);
 			await e.reply(result.success ? `微信个人号登录成功: ${account.nickname}` : `凭证已保存 但连接失败: ${result.error || "未知错误"}`);
 			return true;
@@ -1542,12 +1550,13 @@ var Manager = class {
 			await e.reply(`请扫码登录 或访问链接: ${link}`);
 		}
 	}
-	/** 保存扫码登录结果 */
-	async #saveLogin(status) {
+	/** 保存扫码登录结果 target 为指定重登的既有账号 保留其 botId 与数据 */
+	async #saveLogin(status, target) {
 		const accounts = config().accounts;
-		const account = accounts.find((a) => a.userId === status.ilink_user_id);
+		const account = target || accounts.find((a) => a.userId === status.ilink_user_id);
 		if (account) {
 			account.token = status.bot_token;
+			account.userId = status.ilink_user_id;
 			account.accountId = status.ilink_bot_id || account.accountId;
 			if (status.baseurl) account.baseUrl = status.baseurl;
 			account.isDisable = false;
@@ -1574,7 +1583,7 @@ var Manager = class {
 			const status = account.isDisable ? "已禁用" : this.bots.has(account.botId) ? "在线" : "离线";
 			return `${index + 1}. ${account.nickname || account.botId} [${status}]\n   ${account.userId}`;
 		});
-		return `微信个人号账号列表:\n${list.join("\n")}\n\n指令: #微信登录 | #微信删除[序号] | #微信禁用/启用[序号]`;
+		return `微信个人号账号列表:\n${list.join("\n")}\n\n指令: #微信登录 | #微信登录[序号] 重登 | #微信删除[序号] | #微信禁用/启用[序号]`;
 	}
 	/** 删除账号 */
 	async removeAccount(input) {
