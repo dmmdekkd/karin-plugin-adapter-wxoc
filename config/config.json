@@ -1,0 +1,19 @@
+{
+  "baseUrl": "https://ilinkai.weixin.qq.com",
+  "cdnUrl": "https://novac2c.cdn.weixin.qq.com/c2c",
+  "botType": "3",
+  "apiTimeout": 15000,
+  "longPollTimeout": 35000,
+  "qrPollInterval": 2000,
+  "mediaMaxSizeMb": 100,
+  "downloadFile": true,
+  "typingKeepalive": 5000,
+  "typingTicketTtl": 60000,
+  "typingTtl": 180000,
+  "debug": false,
+  "autoUpdate": true,
+  "updateCheckInterval": 21600000,
+  "botAvatar": "",
+  "userAvatar": "https://wx.qlogo.cn/mmhead/ver_1/oYCOkauMcTGPkhTn8nia8dq9gRzxYCtyG4ZRlrVmF8jwf9Kzn7ZKBqRvtPCKWtTBLNlIJaQO0dZI6QAGGXTqNqQ9eJI8lnwk8VpdILuI13CqZ7TyYByRXfGuJjIGW0o80vBYopc7EUaKR91V5LfrUcg/0",
+  "accounts": []
+}
