@@ -1,0 +1,24 @@
+# 提交格式：<类型>(<范围>?): <简短描述>
+#
+# 类型（release-please 依据类型生成 CHANGELOG 与版本号）：
+#   feat:     新功能        → minor +1
+#   fix:      缺陷修复      → patch +1
+#   perf:     性能优化      → patch +1
+#   refactor: 重构（不改行为）
+#   docs:     文档
+#   style:    代码格式
+#   test:     测试
+#   build:    构建或依赖变更
+#   ci:       CI 配置变更
+#   chore:    其他杂项
+#
+# 破坏性变更：正文或脚注写「BREAKING CHANGE: 说明」→ major +1
+#
+# 规则：
+#   - 标题不超过 50 字符，结尾不加句号
+#   - 标题与正文之间留一空行
+#   - 正文说明为什么改，而不是改了什么
+#
+# 示例：
+#   feat(adapter): 支持多账号并行加载
+#   fix(client): 修复错误响应解析对 ret=100 的误匹配
