@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.3...karin-plugin-adapter-wxoc-v1.0.4) (2026-09-13)
+
+
+### 🔧 杂项
+
+* **package.json:** update project description to Claw adapter ([e997477](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/commit/e997477e752ca20f75843908c94f6a12a1640781))
+
 ## [1.0.3](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.2...karin-plugin-adapter-wxoc-v1.0.3) (2026-09-13)
 
 
