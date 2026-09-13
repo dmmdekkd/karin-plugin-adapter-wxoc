@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.2...karin-plugin-adapter-wxoc-v1.0.3) (2026-09-13)
+
+
+### ♻️ 代码重构
+
+* 完成微信个人号适配器到Claw适配器的重构 ([9e82bbc](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/commit/9e82bbc4177d1e3124ce9aca1d755d359d3c1118))
+
 ## [1.0.2](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.1...karin-plugin-adapter-wxoc-v1.0.2) (2026-09-13)
 
 
