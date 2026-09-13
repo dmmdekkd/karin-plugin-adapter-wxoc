@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.1...karin-plugin-adapter-wxoc-v1.0.2) (2026-09-13)
+
+
+### ♻️ 代码重构
+
+* 重构自动更新逻辑并优化账号登录功能 ([7e60d2f](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/commit/7e60d2f82641b8688754a06c7bb1dbc07ac2af74))
+
 ## [1.0.1](https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/compare/karin-plugin-adapter-wxoc-v1.0.0...karin-plugin-adapter-wxoc-v1.0.1) (2026-09-13)
 
 
