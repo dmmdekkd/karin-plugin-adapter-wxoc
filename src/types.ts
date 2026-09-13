@@ -42,8 +42,15 @@ export interface VideoItem {
   video_item: { media: IlinkMedia; video_size: number }
 }
 
+/** 工具调用条目 */
+export interface ToolCallItem {
+  type: 11 | 12
+  tool_call_start_item?: { tool_name?: string }
+  tool_call_result_item?: { tool_name?: string }
+}
+
 /** 消息条目 */
-export type IlinkItem = TextItem | ImageItem | VoiceItem | FileItem | VideoItem
+export type IlinkItem = TextItem | ImageItem | VoiceItem | FileItem | VideoItem | ToolCallItem
 
 /** 局部引用元数据 */
 export interface PartialText {
@@ -56,7 +63,7 @@ export interface PartialText {
 
 /** 引用消息 */
 export interface RefMessage {
-  message_item?: Partial<IlinkItem>
+  message_item?: ItemWithRef
   message_id?: string
   msg_id?: string
   /** 新版客户端仅携带的服务端消息ID 用于本地缓存还原引用 */
@@ -97,6 +104,12 @@ export interface QRCodeStatus {
   baseurl?: string
 }
 
+/** 发送消息响应 */
+export interface SendMessageResponse {
+  msg?: { message_id?: string }
+  message_id?: string
+}
+
 /** 消息更新响应 */
 export interface UpdatesResponse {
   ret?: number
@@ -119,7 +132,7 @@ export interface TypingState {
 /** 下线回调 */
 export type OfflineCallback = (botId: string, message: string) => Promise<void>
 
-/** 微信个人号账号 */
+/** 微信Claw账号 */
 export interface Account {
   /** 账号ID weixin_personal_XXX */
   botId: string
@@ -165,8 +178,8 @@ export interface Config {
   debug: boolean
   /** 自动更新开关 */
   autoUpdate: boolean
-  /** 自动更新检查间隔 (ms) */
-  updateCheckInterval: number
+  /** 自动更新 cron 表达式 */
+  updateCron: string
   /** Bot 头像地址 */
   botAvatar: string
   /** 用户头像地址 */

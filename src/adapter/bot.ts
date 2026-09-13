@@ -32,9 +32,10 @@ import { state } from '@/core/state'
 import { sanitizeLog } from '@/core/media'
 import { dir } from '@/dir'
 import { msgId, sleep, uuid } from '@/utils/common'
-import type { Account, Config, IlinkMessage, OfflineCallback, TypingState } from '@/types'
+import { http } from '@/utils/http'
+import type { Account, Config, IlinkMessage, OfflineCallback, SendMessageResponse, TypingState } from '@/types'
 
-/** 微信个人号适配器 */
+/** 微信Claw适配器 */
 export class WechatAdapter extends AdapterBase {
   /** 停止标志 */
   stop = false
@@ -87,10 +88,9 @@ export class WechatAdapter extends AdapterBase {
   /** 停止轮询并注销 */
   async destroy (): Promise<void> {
     this.stop = true
-    /** 通知服务端下线 */
-    await this.client.notify(false).catch(() => { })
-    await sleep(1000)
     unregisterBot('index', this.adapter.index)
+    /** 通知服务端下线 不阻塞 */
+    this.client.notify(false).catch(() => { })
   }
 
   /** 下线通知 */
@@ -119,7 +119,7 @@ export class WechatAdapter extends AdapterBase {
         const syncBuf = await state.getSyncBuf(this.selfId)
         const result = await this.client.getUpdates(syncBuf, pollTimeout)
         pollTimeout = result.longpolling_timeout_ms || this.#cfg.longPollTimeout
-        if (errors >= 3) logger.bot('info', this.selfId, `[微信个人号] 网络恢复 (共重试${errors}次)`)
+        if (errors >= 3) logger.bot('info', this.selfId, `[微信Claw] 网络恢复 (共重试${errors}次)`)
         errors = 0
 
         /** 全部处理成功后才推进游标 避免处理失败丢消息 */
@@ -144,7 +144,7 @@ export class WechatAdapter extends AdapterBase {
         const ms = Math.min(errors * 5000, 300000)
         /** 前3次逐条报 之后每10次汇总一条 避免刷屏 */
         if (errors <= 3 || errors % 10 === 0) {
-          logger.bot('warn', this.selfId, `[微信个人号] 轮询断开 (第${errors}次重连 休眠${ms / 1000}s): ${message}`)
+          logger.bot('warn', this.selfId, `[微信Claw] 轮询断开 (第${errors}次重连 休眠${ms / 1000}s): ${message}`)
         }
         await sleep(ms)
       }
@@ -213,13 +213,13 @@ export class WechatAdapter extends AdapterBase {
       this.#cache.delete(first)
     }
     history.save(this.selfId, raw).catch(error => {
-      logger.bot('warn', this.selfId, `[微信个人号] 保存历史消息失败: ${(error as Error).message}`)
+      logger.bot('warn', this.selfId, `[微信Claw] 保存历史消息失败: ${(error as Error).message}`)
     })
   }
 
   /** 发送消息 */
   async sendMsg (contact: Contact, elements: Array<SendElement>, retryCount = 0): Promise<SendMsgResults> {
-    if (contact.scene !== 'friend') throw new Error('微信个人号仅支持好友私聊')
+    if (contact.scene !== 'friend') throw new Error('微信Claw仅支持好友私聊')
 
     const peerId = contact.peer
     const contextToken = await state.getContext(this.selfId, peerId)
@@ -233,7 +233,7 @@ export class WechatAdapter extends AdapterBase {
     this.stopTyping(peerId).catch(() => { })
 
     try {
-      const results: Array<Record<string, any>> = []
+      const results: SendMessageResponse[] = []
       for (const batch of batches) {
         results.push(await this.client.sendMessage(peerId, batch, contextToken))
       }
@@ -243,7 +243,7 @@ export class WechatAdapter extends AdapterBase {
 
       const messageId = String(results[0]?.msg?.message_id || results[0]?.message_id || uuid().slice(0, 20))
       if (this.#cfg.debug) {
-        logger.bot('debug', this.selfId, `[微信个人号] 发送消息: ${sanitizeLog(JSON.stringify(results))}`)
+        logger.bot('debug', this.selfId, `[微信Claw] 发送消息: ${sanitizeLog(JSON.stringify(results))}`)
       }
 
       /** 发送的消息也存入历史 */
@@ -332,9 +332,13 @@ export class WechatAdapter extends AdapterBase {
 
     if (!options?.url) throw new Error('downloadFile 需要 url 或 base64')
 
-    const response = await fetch(options.url)
-    if (!response.ok) throw new Error(`下载文件失败: HTTP ${response.status}`)
-    const buffer = Buffer.from(await response.arrayBuffer())
+    const response = await http({
+      url: options.url,
+      method: 'get',
+      responseType: 'arraybuffer',
+    }, '下载文件失败')
+
+    const buffer = Buffer.from(response.data as ArrayBuffer)
 
     const ext = path.extname(new URL(options.url).pathname) || '.bin'
     const fileName = options.fileName || `${createHash('md5').update(buffer).digest('hex')}${ext}`
@@ -343,9 +347,9 @@ export class WechatAdapter extends AdapterBase {
     return { filePath }
   }
 
-  /** 微信个人号不支持撤回消息 */
+  /** 微信Claw不支持撤回消息 */
   async recallMsg (): Promise<void> {
-    throw new Error('微信个人号协议不支持撤回消息')
+    throw new Error('微信Claw协议不支持撤回消息')
   }
 
   /** 获取消息 提供 messageId 时查缓存和历史文件未提供时返回该会话最新一条 */
@@ -371,9 +375,9 @@ export class WechatAdapter extends AdapterBase {
     return userId === this.selfId ? this.#cfg.botAvatar : this.#cfg.userAvatar
   }
 
-  /** 微信个人号不支持群聊 */
+  /** 微信Claw不支持群聊 */
   async getGroupAvatarUrl (): Promise<string> {
-    throw new Error('微信个人号不支持群聊')
+    throw new Error('微信Claw不支持群聊')
   }
 
   /** 获取陌生人信息 */
@@ -388,24 +392,24 @@ export class WechatAdapter extends AdapterBase {
     return contacts.map(contact => ({ userId: contact.userId, uid: contact.userId, nick: contact.name }))
   }
 
-  /** 微信个人号不支持群聊 返回空列表 */
+  /** 微信Claw不支持群聊 返回空列表 */
   async getGroupList (): Promise<Array<GroupInfo>> {
     return []
   }
 
-  /** 微信个人号不支持群聊 */
+  /** 微信Claw不支持群聊 */
   async getGroupInfo (_groupId: string): Promise<GroupInfo> {
-    throw new Error('微信个人号不支持群聊')
+    throw new Error('微信Claw不支持群聊')
   }
 
-  /** 微信个人号不支持群聊 返回空列表 */
+  /** 微信Claw不支持群聊 返回空列表 */
   async getGroupMemberList (_groupId: string): Promise<Array<GroupMemberInfo>> {
     return []
   }
 
-  /** 微信个人号不支持群聊 */
+  /** 微信Claw不支持群聊 */
   async getGroupMemberInfo (_groupId: string, targetId: string): Promise<GroupMemberInfo> {
-    throw new Error(`微信个人号不支持群聊 (${targetId})`)
+    throw new Error(`微信Claw不支持群聊 (${targetId})`)
   }
 
   /** 发送"正在输入"状态 返回ownerId 供 stopTyping 使用 */
@@ -441,7 +445,7 @@ export class WechatAdapter extends AdapterBase {
         }
         await this.client.sendTypingState(peerId, typing!.ticket)
       } catch (error) {
-        logger.bot('error', this.selfId, `[微信个人号] 发送正在输入状态失败: ${(error as Error).message}`)
+        logger.bot('error', this.selfId, `[微信Claw] 发送正在输入状态失败: ${(error as Error).message}`)
       }
     }
 

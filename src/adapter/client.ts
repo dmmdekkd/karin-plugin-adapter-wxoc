@@ -1,16 +1,16 @@
 import crypto from 'node:crypto'
-import { logger } from 'node-karin'
 import * as aes from '@/core/aes'
-import { resolveMedia, sanitizeLog } from '@/core/media'
+import { resolveMedia } from '@/core/media'
 import { dir } from '@/dir'
 import { uuid } from '@/utils/common'
+import { http } from '@/utils/http'
 import type {
   ClientOptions,
   Config,
-  IlinkMedia,
   QRCodeResponse,
   QRCodeStatus,
   RequestOptions,
+  SendMessageResponse,
   UpdatesResponse,
   UploadResult,
   UploadUrlResponse,
@@ -36,9 +36,9 @@ export class IlinkError extends Error {
 
 /** 判断错误是否为登录凭证失效 基于结构化响应字段 */
 export const isTokenInvalid = (error: unknown): boolean => {
-  if (!(error instanceof IlinkError)) return false
-  return error.status === 401 || error.status === 403 ||
-    error.ret === 100 || error.errcode === -14
+  const e = error as IlinkError
+  return e.status === 401 || e.status === 403 ||
+    e.ret === 100 || e.errcode === -14
 }
 
 /** JSON 解析 将 uint64 标识字段加引号避免精度丢失 */
@@ -143,27 +143,21 @@ export class WechatClient {
 
   /** 发送 API 请求 处理 iLink 应用层错误 */
   private async request<T> (method: string, endpoint: string, options: RequestOptions = {}): Promise<T> {
-    let url = `${this.baseUrl}/${endpoint.replace(/^\//, '')}`
-    if (options.params) url += `?${new URLSearchParams(options.params)}`
-
-    const start = Date.now()
-    const response = await fetch(url, {
+    const response = await http({
+      url: `${this.baseUrl}/${endpoint.replace(/^\//, '')}`,
       method,
+      params: options.params,
       headers: { ...this.headers(options.token ?? false), ...options.headers },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: AbortSignal.timeout(options.timeout ?? this.cfg.apiTimeout),
-    })
+      data: options.body ? JSON.stringify(options.body) : undefined,
+      timeout: options.timeout ?? this.cfg.apiTimeout,
+      transformResponse: [(data: string) => data],
+    }, 'iLink API 请求失败')
 
-    const text = await response.text()
-    if (this.cfg.debug) {
-      logger.mark(`[微信个人号] ${method} ${url} -> ${response.status} ${Date.now() - start}ms: ${sanitizeLog(text.slice(0, 1000))}`)
-    }
-    if (!response.ok) throw new IlinkError(`HTTP ${response.status}: ${text}`, response.status)
-
-    const json = text ? parseJson<Record<string, any>>(text) : {}
-    const base = json.base_info || json.base_response || {}
-    const ret = json.ret ?? base.ret ?? 0
-    const errcode = json.errcode ?? base.errcode ?? 0
+    const text = String(response.data)
+    const json = text ? parseJson<Record<string, unknown>>(text) : {}
+    const base = (json.base_info || json.base_response || {}) as { ret?: number, errcode?: number, errmsg?: string }
+    const ret = Number(json.ret ?? base.ret ?? 0)
+    const errcode = Number(json.errcode ?? base.errcode ?? 0)
     if (ret !== 0 || errcode !== 0) {
       throw new IlinkError(`iLink API 错误: ret=${ret}, errcode=${errcode}, errmsg=${json.errmsg || base.errmsg || 'none'}`, response.status, ret, errcode)
     }
@@ -197,7 +191,7 @@ export class WechatClient {
       })
     } catch (error) {
       /** 长轮询超时属正常控制流 返回空响应供重试 */
-      if (['AbortError', 'TimeoutError'].includes((error as Error).name)) {
+      if (['ECONNABORTED', 'ETIMEDOUT'].includes((error as Error & { code?: string }).code || '')) {
         return { ret: 0, get_updates_buf: syncBuf }
       }
       throw error
@@ -214,7 +208,7 @@ export class WechatClient {
   }
 
   /** 发送消息 */
-  async sendMessage (toUserId: string, itemList: Array<object>, contextToken: string): Promise<Record<string, any>> {
+  async sendMessage (toUserId: string, itemList: Array<object>, contextToken: string): Promise<SendMessageResponse> {
     const clientId = uuid()
     return this.request('POST', 'ilink/bot/sendmessage', {
       body: {
@@ -251,27 +245,26 @@ export class WechatClient {
     const url = uploadFullUrl ||
       `${this.cfg.cdnUrl}/upload?encrypted_query_param=${encodeURIComponent(uploadParam!)}&filekey=${encodeURIComponent(fileKey)}`
 
-    const start = Date.now()
-    const response = await fetch(url, {
-      method: 'POST',
-      body: new Uint8Array(aes.encrypt(buffer, Buffer.from(aesKeyHex, 'hex'))),
+    const response = await http({
+      url,
+      method: 'post',
+      data: new Uint8Array(aes.encrypt(buffer, Buffer.from(aesKeyHex, 'hex'))),
       headers: { 'Content-Type': 'application/octet-stream' },
-      signal: AbortSignal.timeout(this.cfg.apiTimeout),
-    })
-    if (this.cfg.debug) {
-      logger.mark(`[微信个人号] CDN 上传 ${fileKey} -> ${response.status} ${Date.now() - start}ms`)
-    }
-    if (!response.ok) throw new Error(`CDN 上传失败: HTTP ${response.status}`)
-    return response.headers.get('x-encrypted-param') || ''
+      timeout: this.cfg.apiTimeout,
+    }, 'CDN 上传失败')
+    return String(response.headers?.['x-encrypted-param'] || '')
   }
 
   /** 从 CDN 下载并解密媒体文件 */
   async downloadMedia (encryptQueryParam: string, aesKey?: string): Promise<Buffer> {
-    const url = `${this.cfg.cdnUrl}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`
-    const response = await fetch(url, { signal: AbortSignal.timeout(this.cfg.apiTimeout) })
-    if (!response.ok) throw new Error(`CDN 下载失败: HTTP ${response.status}`)
+    const response = await http({
+      url: `${this.cfg.cdnUrl}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`,
+      method: 'get',
+      timeout: this.cfg.apiTimeout,
+      responseType: 'arraybuffer',
+    }, 'CDN 下载失败')
 
-    const encrypted = Buffer.from(await response.arrayBuffer())
+    const encrypted = Buffer.from(response.data as ArrayBuffer)
     const key = decodeAesKey(aesKey)
     return key ? aes.decrypt(encrypted, key) : encrypted
   }

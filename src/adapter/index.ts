@@ -1,8 +1,8 @@
 import QRCode from 'qrcode'
 import path from 'node:path'
-import { logger, segment, watch } from 'node-karin'
+import { segment, watch } from 'node-karin'
 import type { Message } from 'node-karin'
-import { isTokenInvalid, WechatClient } from '@/adapter/client'
+import { WechatClient } from '@/adapter/client'
 import { WechatAdapter } from '@/adapter/bot'
 import { dir } from '@/dir'
 import { history } from '@/core/history'
@@ -44,7 +44,7 @@ export class Manager {
       /** 新增或重新启用的账号 连接 */
       for (const account of config().accounts) {
         if (!account.token || account.isDisable || this.bots.has(account.botId) || this.#connecting.has(account.botId)) continue
-        tasks.push(this.connect(account).then(() => sleep(2000)))
+        tasks.push(this.connect(account))
       }
 
       if (!tasks.length) return
@@ -78,23 +78,10 @@ export class Manager {
   async load (): Promise<void> {
     const accounts = config().accounts.filter(a => a.token && !a.isDisable && !this.bots.has(a.botId))
     if (!accounts.length) return
-
-    const results = await Promise.all(accounts.map(account =>
-      this.connect(account).then(result => ({ account, ...result }))
-    ))
-
-    const failed = results.filter(result => result.needLogin)
-    if (failed.length) {
-      for (const { account, error } of failed) {
-        logger.mark(`[微信个人号] [${account.nickname || account.botId}] 凭证已失效，请发送 #微信登录 重新扫码 (${error})`)
-        account.token = ''
-        account.isDisable = true
-      }
-      saveConfig({ accounts: config().accounts })
-    }
+    await Promise.all(accounts.map(account => this.connect(account)))
   }
 
-  /** 连接账号 验证凭证后创建适配器 */
+  /** 连接账号 直接创建适配器 凭证失效由轮询循环下线处理兜底 */
   async connect (account: Account): Promise<{ success?: boolean; needLogin?: boolean; error?: string }> {
     if (!account.token) return { needLogin: true, error: '缺少登录凭证' }
     /** 已在连接中直接放行 避免登录流程与热加载并发重复连接 */
@@ -102,23 +89,7 @@ export class Manager {
 
     this.#connecting.add(account.botId)
     try {
-      const cfg = config()
-      const client = new WechatClient({ cfg, token: account.token, baseUrl: account.baseUrl })
-
-      try {
-        const syncBuf = await state.getSyncBuf(account.botId)
-        /** 短超时验证凭证 服务器未拒绝即放行 避免长轮询挂住连接流程 */
-        await client.getUpdates(syncBuf, 3000)
-      } catch (error) {
-        const message = (error as Error).message || ''
-        if (isTokenInvalid(error)) return { needLogin: true, error: message }
-        /** 网络波动时放行 交给轮询循环重连 */
-        if (!/timeout|ECONNRESET|fetch failed|AbortError/i.test(message)) {
-          return { needLogin: true, error: `凭证验证失败: ${message}` }
-        }
-      }
-
-      await this.#create(account, cfg)
+      await this.#create(account, config())
       return { success: true }
     } finally {
       this.#connecting.delete(account.botId)
@@ -162,16 +133,16 @@ export class Manager {
     }
 
     await this.destroy(botId)
-    logger.mark(`[微信个人号] ${botId} 已下线: ${message}`)
   }
 
-  /** 扫码登录 input 为序号时重登指定账号 保留其 botId 与数据 */
-  async login (e: Message, input?: string): Promise<boolean> {
+  /** 扫码登录 消息带序号时重登指定账号 保留其 botId 与数据 */
+  async login (e: Message): Promise<boolean> {
     let target: Account | undefined
-    if (input) {
-      target = this.findAccount(input.trim()).account
+    const seq = e.msg.match(/^#?[cC][lL][aA][wW]登录\s*(\d+)$/)?.[1]
+    if (seq) {
+      target = this.findAccount(seq).account
       if (!target) {
-        await e.reply('未找到该账号，用 #微信账号列表 查看序号')
+        await e.reply('未找到该账号，用 #Claw账号列表 查看序号')
         return false
       }
     }
@@ -200,9 +171,7 @@ export class Manager {
       let status: QRCodeStatus
       try {
         status = await client.pollQRStatus(qr.qrcode)
-      } catch (error) {
-        const message = (error as Error).message || ''
-        if (!/timeout/i.test(message)) logger.error(`[微信个人号] 轮询二维码状态失败: ${message}`)
+      } catch {
         continue
       }
 
@@ -217,9 +186,8 @@ export class Manager {
 
       const account = await this.#saveLogin({ ilink_user_id: userId, ilink_bot_id: accountId, bot_token: token, nickname, baseurl }, target)
       const result = await this.connect(account)
-      await e.reply(result.success
-        ? `微信个人号登录成功: ${account.nickname}`
-        : `凭证已保存 但连接失败: ${result.error || '未知错误'}`)
+      if (!result.success) throw new Error(result.error)
+      await e.reply(`微信Claw登录成功: ${account.nickname}`)
       return true
     }
 
@@ -233,13 +201,8 @@ export class Manager {
 
     /** 终端适配器直接在终端打印二维码 */
     if (e.bot.adapter.protocol === 'console') {
-      try {
-        const terminal = await QRCode.toString(link, { type: 'terminal', small: true })
-        process.stdout.write(`\n请使用微信扫码登录:\n${terminal}\n`)
-      } catch (error) {
-        logger.error(`[微信个人号] 终端输出二维码失败: ${(error as Error).message}`)
-      }
-      await e.reply(`请扫码登录 或访问链接: ${link}`)
+      const terminal = await QRCode.toString(link, { type: 'terminal', small: true })
+      process.stdout.write(`\n请使用微信扫码登录:\n${terminal}\n${link}\n`)
       return
     }
 
@@ -270,7 +233,7 @@ export class Manager {
         token: status.bot_token,
         accountId: status.ilink_bot_id || '',
         userId: status.ilink_user_id,
-        nickname: status.nickname || `微信ClawBot${accounts.length + 1}`,
+        nickname: status.nickname || `微信Claw${accounts.length + 1}`,
         baseUrl: status.baseurl,
       })
     }
@@ -282,20 +245,20 @@ export class Manager {
   /** 账号列表文本 */
   listText (): string {
     const accounts = config().accounts
-    if (!accounts.length) return '暂无账号，用 #微信登录 添加'
+    if (!accounts.length) return '暂无账号，用 #Claw登录 添加'
 
     const list = accounts.map((account, index) => {
       const status = account.isDisable ? '已禁用' : this.bots.has(account.botId) ? '在线' : '离线'
       return `${index + 1}. ${account.nickname || account.botId} [${status}]\n   ${account.userId}`
     })
 
-    return `微信个人号账号列表:\n${list.join('\n')}\n\n指令: #微信登录 | #微信登录[序号] 重登 | #微信删除[序号] | #微信禁用/启用[序号]`
+    return `微信Claw账号列表:\n${list.join('\n')}`
   }
 
   /** 删除账号 */
   async removeAccount (input: string): Promise<string> {
     const { account } = this.findAccount(input)
-    if (!account) return '未找到账号，用 #微信账号列表 查看'
+    if (!account) return '未找到账号，用 #Claw账号列表 查看'
 
     const name = account.nickname || account.botId
     await this.remove(account)
@@ -305,7 +268,7 @@ export class Manager {
   /** 禁用/启用账号 */
   async toggleAccount (input: string, disable: boolean): Promise<string> {
     const { account, accounts } = this.findAccount(input)
-    if (!account) return '未找到账号，用 #微信账号列表 查看'
+    if (!account) return '未找到账号，用 #Claw账号列表 查看'
     if (account.isDisable === disable) return `账号已是${disable ? '禁用' : '启用'}状态`
 
     if (disable) await this.destroy(account.botId)

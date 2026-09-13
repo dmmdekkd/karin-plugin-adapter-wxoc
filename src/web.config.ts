@@ -1,18 +1,18 @@
 import { components, defineConfig } from 'node-karin'
+import { task } from '@/apps/update'
+import { restartAutoUpdate } from '@/core/update'
 import { config, saveConfig } from '@/utils/config'
 import { dir } from '@/dir'
 import type { Config } from '@/types'
 
-/** 数字类型的配置 key 及取值范围 [min, max] 保存时由 string 转回 number */
+/** 毫秒级时间的配置 key 及取值范围 [min, max] 保存时由 string 转回 number */
 const NUMBER_KEYS = {
   apiTimeout: [1000, 60000],
   longPollTimeout: [10000, 120000],
   qrPollInterval: [500, 30000],
-  mediaMaxSizeMb: [1, 1024],
   typingKeepalive: [1000, 30000],
   typingTicketTtl: [10000, 600000],
   typingTtl: [30000, 1800000],
-  updateCheckInterval: [600000, 604800000],
 } as const
 
 /** WebUI 配置面板 */
@@ -20,10 +20,11 @@ export default defineConfig({
   /** 插件信息 */
   info: {
     id: 'karin-plugin-adapter-wxoc',
-    name: 'karin-plugin-adapter-wxoc',
+    name: '微信Claw适配器',
     author: {
       name: 'dmmdekkd',
       home: 'https://github.com/dmmdekkd/karin-plugin-adapter-wxoc',
+      avatar: 'https://github.com/dmmdekkd.png',
     },
     icon: {
       name: 'forum',
@@ -31,15 +32,15 @@ export default defineConfig({
       color: '#F44336',
     },
     version: dir.version,
-    description: 'Karin 微信个人号适配器 基于 ilink 协议',
+    description: 'Karin 微信Claw适配器 基于 ilink 协议',
   },
 
   /** 动态渲染的组件 */
   components: () => {
     const cfg = config()
 
-    /** 数字输入框 带取值范围校验 */
-    const numberInput = (key: keyof typeof NUMBER_KEYS, label: string) => {
+    /** 时间输入框 带取值范围校验 */
+    const durationInput = (key: keyof typeof NUMBER_KEYS, label: string) => {
       const [min, max] = NUMBER_KEYS[key]
       return components.input.number(key, {
         label,
@@ -99,10 +100,10 @@ export default defineConfig({
             title: '网络',
             subtitle: '超时与轮询',
             children: [
-              numberInput('apiTimeout', 'API 超时 (ms)'),
-              numberInput('longPollTimeout', '长轮询超时 (ms)'),
-              numberInput('qrPollInterval', '二维码轮询间隔 (ms)'),
-              numberInput('mediaMaxSizeMb', '出站媒体大小上限 (MB)'),
+              durationInput('apiTimeout', 'API 超时'),
+              durationInput('longPollTimeout', '长轮询超时'),
+              durationInput('qrPollInterval', '二维码轮询间隔'),
+              components.input.number('mediaMaxSizeMb', { label: '出站媒体大小上限 (MB)', color: 'danger', defaultValue: String(cfg.mediaMaxSizeMb) }),
             ],
           }),
           components.accordion.createItem('switches', {
@@ -111,7 +112,7 @@ export default defineConfig({
             children: [
               components.switch.create('downloadFile', { label: '接收文件自动下载', color: 'danger', defaultSelected: cfg.downloadFile }),
               components.switch.create('autoUpdate', { label: '自动更新', color: 'danger', defaultSelected: cfg.autoUpdate }),
-              numberInput('updateCheckInterval', '自动更新检查间隔 (ms)'),
+              components.input.string('updateCron', { label: '自动更新 Cron 表达式', color: 'danger', defaultValue: cfg.updateCron }),
               components.switch.create('debug', { label: '调试模式', color: 'danger', defaultSelected: cfg.debug }),
             ],
           }),
@@ -127,9 +128,9 @@ export default defineConfig({
             title: '正在输入',
             subtitle: '正在输入状态',
             children: [
-              numberInput('typingKeepalive', '心跳保活间隔 (ms)'),
-              numberInput('typingTicketTtl', 'Ticket 有效期 (ms)'),
-              numberInput('typingTtl', '最长持续时间 (ms)'),
+              durationInput('typingKeepalive', '心跳保活间隔'),
+              durationInput('typingTicketTtl', 'Ticket 有效期'),
+              durationInput('typingTtl', '最长持续时间'),
             ],
           }),
         ],
@@ -137,7 +138,7 @@ export default defineConfig({
     ]
   },
 
-  /** 前端点击保存后调用 手风琴返回按分组包裹的数组 数字类型的值是 string 需转回 number */
+  /** 前端点击保存后调用 手风琴返回按分组包裹的数组 时间字段是可读字符串需解析回毫秒 */
   save: (config: Record<string, unknown>) => {
     const { accounts, settings } = config
 
@@ -147,7 +148,7 @@ export default defineConfig({
       if (group && typeof group === 'object') Object.assign(payload, group)
     }
 
-    /** 数字类型由 string 转回 number */
+    /** 时间字符串转回 number */
     for (const key of Object.keys(NUMBER_KEYS)) {
       if (payload[key] !== undefined) payload[key] = Number(payload[key])
     }
@@ -169,9 +170,8 @@ export default defineConfig({
 
     saveConfig({ ...payload, accounts: normalized } as unknown as Partial<Config>)
 
-    /** 自动更新定时任务为启动时注册 开关或间隔变更需重启生效 */
-    const autoUpdateChanged = payload.autoUpdate !== undefined || payload.updateCheckInterval !== undefined
-    const message = autoUpdateChanged ? '保存成功喵 ~ 自动更新配置将在重启 Karin 后生效' : '保存成功喵 ~'
-    return { success: true, message }
+    /** 自动更新开关或 cron 变更立即重建调度 */
+    restartAutoUpdate(task)
+    return { success: true, message: '保存成功喵 ~' }
   },
 })

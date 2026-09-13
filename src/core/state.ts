@@ -12,7 +12,7 @@ export const state = {
     try {
       return (await redis.hGet(hashKey(botId), 'syncBuf')) || ''
     } catch (error) {
-      logger.error(`[微信个人号] 读取 syncBuf 失败: ${(error as Error).message}`)
+      logger.error(`[微信Claw] 读取 syncBuf 失败: ${(error as Error).message}`)
       return ''
     }
   },
@@ -29,7 +29,7 @@ export const state = {
     try {
       return (await redis.hGet(hashKey(botId), `context:${userId}`)) || ''
     } catch (error) {
-      logger.error(`[微信个人号] 读取 contextToken 失败: ${(error as Error).message}`)
+      logger.error(`[微信Claw] 读取 contextToken 失败: ${(error as Error).message}`)
       return ''
     }
   },
@@ -80,7 +80,7 @@ export const state = {
       }
       return contacts
     } catch (error) {
-      logger.error(`[微信个人号] 读取联系人失败: ${(error as Error).message}`)
+      logger.error(`[微信Claw] 读取联系人失败: ${(error as Error).message}`)
       return []
     }
   },

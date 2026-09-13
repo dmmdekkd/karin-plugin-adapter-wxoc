@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Detected, FormatInfo, ResolveOptions, Resolved } from '@/types'
+import { http } from '@/utils/http'
 
 /** 常见媒体格式 */
 const FORMATS: Record<string, FormatInfo> = {
@@ -133,11 +134,16 @@ export const resolveMedia = async (
     }
 
     if (url && /^https?:$/.test(url.protocol)) {
-      const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(timeoutMs, 1)) })
-      if (!res.ok) throw new Error(`下载媒体失败: HTTP ${res.status}`)
-      buffer = Buffer.from(await res.arrayBuffer())
+      const response = await http({
+        url: url.href,
+        method: 'get',
+        timeout: Math.max(timeoutMs, 1),
+        responseType: 'arraybuffer',
+      }, '下载媒体失败')
+
+      buffer = Buffer.from(response.data as ArrayBuffer)
       if (buffer.length > maxBytes) throw new Error(`媒体大小超出限制 (${maxBytes})`)
-      mimeType = res.headers.get('content-type') || ''
+      mimeType = String(response.headers?.['content-type'] || '')
       if (!suppliedName) fileName = nameFromUrl(url)
     } else {
       const filePath = url && url.protocol === 'file:' ? fileURLToPath(url) : mediaRef
