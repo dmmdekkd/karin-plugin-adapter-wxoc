@@ -3,7 +3,7 @@
   "version": "1.0.3",
   "author": "dmmdekkd",
   "type": "module",
-  "description": "Karin 微信个人号适配器 基于 ilink 协议",
+  "description": "Karin 微信Claw适配器 基于 ilink 协议",
   "homepage": "https://github.com/dmmdekkd/karin-plugin-adapter-wxoc",
   "bugs": {
     "url": "https://github.com/dmmdekkd/karin-plugin-adapter-wxoc/issues"
