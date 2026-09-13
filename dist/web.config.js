@@ -1,28 +1,28 @@
 import { dir } from "./dir.js";
-import { n as saveConfig, t as config } from "./config-FiIQcMOG.js";
+import { n as saveConfig, t as config } from "./config-BsuKObe0.js";
+import { i as restartAutoUpdate, n as task } from "./update-DMpuLeJF.js";
 import { components, defineConfig } from "node-karin";
 
 //#region src/web.config.ts
-/** 数字类型的配置 key 及取值范围 [min, max] 保存时由 string 转回 number */
+/** 毫秒级时间的配置 key 及取值范围 [min, max] 保存时由 string 转回 number */
 const NUMBER_KEYS = {
 	apiTimeout: [1e3, 6e4],
 	longPollTimeout: [1e4, 12e4],
 	qrPollInterval: [500, 3e4],
-	mediaMaxSizeMb: [1, 1024],
 	typingKeepalive: [1e3, 3e4],
 	typingTicketTtl: [1e4, 6e5],
-	typingTtl: [3e4, 18e5],
-	updateCheckInterval: [6e5, 6048e5]
+	typingTtl: [3e4, 18e5]
 };
 /** WebUI 配置面板 */
 var web_config_default = defineConfig({
 	/** 插件信息 */
 	info: {
 		id: "karin-plugin-adapter-wxoc",
-		name: "karin-plugin-adapter-wxoc",
+		name: "微信Claw适配器",
 		author: {
 			name: "dmmdekkd",
-			home: "https://github.com/dmmdekkd/karin-plugin-adapter-wxoc"
+			home: "https://github.com/dmmdekkd/karin-plugin-adapter-wxoc",
+			avatar: "https://github.com/dmmdekkd.png"
 		},
 		icon: {
 			name: "forum",
@@ -30,13 +30,13 @@ var web_config_default = defineConfig({
 			color: "#F44336"
 		},
 		version: dir.version,
-		description: "Karin 微信个人号适配器 基于 ilink 协议"
+		description: "Karin 微信Claw适配器 基于 ilink 协议"
 	},
 	/** 动态渲染的组件 */
 	components: () => {
 		const cfg = config();
-		/** 数字输入框 带取值范围校验 */
-		const numberInput = (key, label) => {
+		/** 时间输入框 带取值范围校验 */
+		const durationInput = (key, label) => {
 			const [min, max] = NUMBER_KEYS[key];
 			return components.input.number(key, {
 				label,
@@ -124,10 +124,14 @@ var web_config_default = defineConfig({
 					title: "网络",
 					subtitle: "超时与轮询",
 					children: [
-						numberInput("apiTimeout", "API 超时 (ms)"),
-						numberInput("longPollTimeout", "长轮询超时 (ms)"),
-						numberInput("qrPollInterval", "二维码轮询间隔 (ms)"),
-						numberInput("mediaMaxSizeMb", "出站媒体大小上限 (MB)")
+						durationInput("apiTimeout", "API 超时"),
+						durationInput("longPollTimeout", "长轮询超时"),
+						durationInput("qrPollInterval", "二维码轮询间隔"),
+						components.input.number("mediaMaxSizeMb", {
+							label: "出站媒体大小上限 (MB)",
+							color: "danger",
+							defaultValue: String(cfg.mediaMaxSizeMb)
+						})
 					]
 				}),
 				components.accordion.createItem("switches", {
@@ -144,7 +148,11 @@ var web_config_default = defineConfig({
 							color: "danger",
 							defaultSelected: cfg.autoUpdate
 						}),
-						numberInput("updateCheckInterval", "自动更新检查间隔 (ms)"),
+						components.input.string("updateCron", {
+							label: "自动更新 Cron 表达式",
+							color: "danger",
+							defaultValue: cfg.updateCron
+						}),
 						components.switch.create("debug", {
 							label: "调试模式",
 							color: "danger",
@@ -169,15 +177,15 @@ var web_config_default = defineConfig({
 					title: "正在输入",
 					subtitle: "正在输入状态",
 					children: [
-						numberInput("typingKeepalive", "心跳保活间隔 (ms)"),
-						numberInput("typingTicketTtl", "Ticket 有效期 (ms)"),
-						numberInput("typingTtl", "最长持续时间 (ms)")
+						durationInput("typingKeepalive", "心跳保活间隔"),
+						durationInput("typingTicketTtl", "Ticket 有效期"),
+						durationInput("typingTtl", "最长持续时间")
 					]
 				})
 			]
 		})];
 	},
-	/** 前端点击保存后调用 手风琴返回按分组包裹的数组 数字类型的值是 string 需转回 number */
+	/** 前端点击保存后调用 手风琴返回按分组包裹的数组 时间字段是可读字符串需解析回毫秒 */
 	save: (config) => {
 		const { accounts, settings } = config;
 		/** 分组手风琴返回数组 每项为该组的字段集合 依次展开 */
@@ -185,7 +193,7 @@ var web_config_default = defineConfig({
 		for (const group of Array.isArray(settings) ? settings : []) {
 			if (group && typeof group === "object") Object.assign(payload, group);
 		}
-		/** 数字类型由 string 转回 number */
+		/** 时间字符串转回 number */
 		for (const key of Object.keys(NUMBER_KEYS)) {
 			if (payload[key] !== undefined) payload[key] = Number(payload[key]);
 		}
@@ -207,12 +215,11 @@ var web_config_default = defineConfig({
 			...payload,
 			accounts: normalized
 		});
-		/** 自动更新定时任务为启动时注册 开关或间隔变更需重启生效 */
-		const autoUpdateChanged = payload.autoUpdate !== undefined || payload.updateCheckInterval !== undefined;
-		const message = autoUpdateChanged ? "保存成功喵 ~ 自动更新配置将在重启 Karin 后生效" : "保存成功喵 ~";
+		/** 自动更新开关或 cron 变更立即重建调度 */
+		restartAutoUpdate(task);
 		return {
 			success: true,
-			message
+			message: "保存成功喵 ~"
 		};
 	}
 });

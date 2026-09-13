@@ -1,12 +1,12 @@
 import { dir } from "./dir.js";
-import { n as sleep, r as uuid, t as msgId } from "./common-DjqiB3JB.js";
-import { n as saveConfig, t as config } from "./config-FiIQcMOG.js";
+import { a as uuid, i as sleep, n as saveConfig, r as msgId, t as config } from "./config-BsuKObe0.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AdapterBase, contactFriend, createBotOfflineNotice, createFriendMessage, db, logger, redis, registerBot, segment, senderFriend, unregisterBot, watch } from "node-karin";
 import QRCode from "qrcode";
 import crypto, { createHash } from "node:crypto";
 import fs, { mkdir, writeFile } from "node:fs/promises";
+import axios from "node-karin/axios";
 
 //#region src/core/aes.ts
 /** 根据密钥长度获取算法 */
@@ -39,6 +39,18 @@ const decrypt = (data, key) => {
 	decipher.setAutoPadding(false);
 	return unpad(Buffer.concat([decipher.update(data), decipher.final()]));
 };
+
+//#endregion
+//#region src/utils/http.ts
+/** 统一请求 超时原样抛出 其余错误统一转换为带前缀的 Error 并携带 status */
+const http = async (config, label) => axios(config).catch((error) => {
+	/** 超时原样抛出 由长轮询识别为正常控制流 */
+	if (["ECONNABORTED", "ETIMEDOUT"].includes(error.code || "")) throw error;
+	const status = error.response?.status;
+	const data = error.response?.data;
+	const detail = typeof data === "string" && data ? data : error?.message || "未知";
+	throw Object.assign(new Error(`${label}: ${status ? `HTTP ${status}: ${detail}` : detail}`), { status });
+});
 
 //#endregion
 //#region src/core/media.ts
@@ -216,11 +228,15 @@ const resolveMedia = async (mediaRef, options = {}) => {
 			url = null;
 		}
 		if (url && /^https?:$/.test(url.protocol)) {
-			const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(timeoutMs, 1)) });
-			if (!res.ok) throw new Error(`下载媒体失败: HTTP ${res.status}`);
-			buffer = Buffer.from(await res.arrayBuffer());
+			const response = await http({
+				url: url.href,
+				method: "get",
+				timeout: Math.max(timeoutMs, 1),
+				responseType: "arraybuffer"
+			}, "下载媒体失败");
+			buffer = Buffer.from(response.data);
 			if (buffer.length > maxBytes) throw new Error(`媒体大小超出限制 (${maxBytes})`);
-			mimeType = res.headers.get("content-type") || "";
+			mimeType = String(response.headers?.["content-type"] || "");
 			if (!suppliedName) fileName = nameFromUrl(url);
 		} else {
 			const filePath = url && url.protocol === "file:" ? fileURLToPath(url) : mediaRef;
@@ -270,8 +286,8 @@ var IlinkError = class extends Error {
 };
 /** 判断错误是否为登录凭证失效 基于结构化响应字段 */
 const isTokenInvalid = (error) => {
-	if (!(error instanceof IlinkError)) return false;
-	return error.status === 401 || error.status === 403 || error.ret === 100 || error.errcode === -14;
+	const e = error;
+	return e.status === 401 || e.status === 403 || e.ret === 100 || e.errcode === -14;
 };
 /** JSON 解析 将 uint64 标识字段加引号避免精度丢失 */
 const parseJson = (text) => {
@@ -369,27 +385,23 @@ var WechatClient = class {
 	}
 	/** 发送 API 请求 处理 iLink 应用层错误 */
 	async request(method, endpoint, options = {}) {
-		let url = `${this.baseUrl}/${endpoint.replace(/^\//, "")}`;
-		if (options.params) url += `?${new URLSearchParams(options.params)}`;
-		const start = Date.now();
-		const response = await fetch(url, {
+		const response = await http({
+			url: `${this.baseUrl}/${endpoint.replace(/^\//, "")}`,
 			method,
+			params: options.params,
 			headers: {
 				...this.headers(options.token ?? false),
 				...options.headers
 			},
-			body: options.body ? JSON.stringify(options.body) : undefined,
-			signal: AbortSignal.timeout(options.timeout ?? this.cfg.apiTimeout)
-		});
-		const text = await response.text();
-		if (this.cfg.debug) {
-			logger.mark(`[微信个人号] ${method} ${url} -> ${response.status} ${Date.now() - start}ms: ${sanitizeLog(text.slice(0, 1e3))}`);
-		}
-		if (!response.ok) throw new IlinkError(`HTTP ${response.status}: ${text}`, response.status);
+			data: options.body ? JSON.stringify(options.body) : undefined,
+			timeout: options.timeout ?? this.cfg.apiTimeout,
+			transformResponse: [(data) => data]
+		}, "iLink API 请求失败");
+		const text = String(response.data);
 		const json = text ? parseJson(text) : {};
 		const base = json.base_info || json.base_response || {};
-		const ret = json.ret ?? base.ret ?? 0;
-		const errcode = json.errcode ?? base.errcode ?? 0;
+		const ret = Number(json.ret ?? base.ret ?? 0);
+		const errcode = Number(json.errcode ?? base.errcode ?? 0);
 		if (ret !== 0 || errcode !== 0) {
 			throw new IlinkError(`iLink API 错误: ret=${ret}, errcode=${errcode}, errmsg=${json.errmsg || base.errmsg || "none"}`, response.status, ret, errcode);
 		}
@@ -422,7 +434,7 @@ var WechatClient = class {
 			});
 		} catch (error) {
 			/** 长轮询超时属正常控制流 返回空响应供重试 */
-			if (["AbortError", "TimeoutError"].includes(error.name)) {
+			if (["ECONNABORTED", "ETIMEDOUT"].includes(error.code || "")) {
 				return {
 					ret: 0,
 					get_updates_buf: syncBuf
@@ -469,25 +481,24 @@ var WechatClient = class {
 	async uploadToCdn(uploadParam, uploadFullUrl, fileKey, aesKeyHex, buffer) {
 		if (!uploadFullUrl && !uploadParam) throw new Error("CDN 上传地址缺失");
 		const url = uploadFullUrl || `${this.cfg.cdnUrl}/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${encodeURIComponent(fileKey)}`;
-		const start = Date.now();
-		const response = await fetch(url, {
-			method: "POST",
-			body: new Uint8Array(encrypt(buffer, Buffer.from(aesKeyHex, "hex"))),
+		const response = await http({
+			url,
+			method: "post",
+			data: new Uint8Array(encrypt(buffer, Buffer.from(aesKeyHex, "hex"))),
 			headers: { "Content-Type": "application/octet-stream" },
-			signal: AbortSignal.timeout(this.cfg.apiTimeout)
-		});
-		if (this.cfg.debug) {
-			logger.mark(`[微信个人号] CDN 上传 ${fileKey} -> ${response.status} ${Date.now() - start}ms`);
-		}
-		if (!response.ok) throw new Error(`CDN 上传失败: HTTP ${response.status}`);
-		return response.headers.get("x-encrypted-param") || "";
+			timeout: this.cfg.apiTimeout
+		}, "CDN 上传失败");
+		return String(response.headers?.["x-encrypted-param"] || "");
 	}
 	/** 从 CDN 下载并解密媒体文件 */
 	async downloadMedia(encryptQueryParam, aesKey) {
-		const url = `${this.cfg.cdnUrl}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`;
-		const response = await fetch(url, { signal: AbortSignal.timeout(this.cfg.apiTimeout) });
-		if (!response.ok) throw new Error(`CDN 下载失败: HTTP ${response.status}`);
-		const encrypted = Buffer.from(await response.arrayBuffer());
+		const response = await http({
+			url: `${this.cfg.cdnUrl}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`,
+			method: "get",
+			timeout: this.cfg.apiTimeout,
+			responseType: "arraybuffer"
+		}, "CDN 下载失败");
+		const encrypted = Buffer.from(response.data);
 		const key = decodeAesKey(aesKey);
 		return key ? decrypt(encrypted, key) : encrypted;
 	}
@@ -562,11 +573,10 @@ var WechatClient = class {
 /** base64 数据URL */
 const b64 = (buffer) => `base64://${buffer.toString("base64")}`;
 /** 下载并解密消息条目中的媒体 */
-const downloadItemMedia = async (client, item, itemKey) => {
-	const specific = item?.[itemKey] || {};
-	const param = specific.media?.encrypt_query_param;
-	if (!param) throw new Error(`媒体下载参数缺失 (${itemKey})`);
-	return client.downloadMedia(param, specific.aeskey || specific.media?.aes_key);
+const downloadItemMedia = async (client, specific, label) => {
+	const param = specific?.media?.encrypt_query_param;
+	if (!param) throw new Error(`媒体下载参数缺失 (${label})`);
+	return client.downloadMedia(param, specific?.aeskey || specific?.media?.aes_key);
 };
 /** 解析单个消息条目为 karin 元素 */
 const parseItem = async (cfg, client, item) => {
@@ -576,24 +586,24 @@ const parseItem = async (cfg, client, item) => {
 			return text ? segment.text(text) : null;
 		}
 		case 2: {
-			const buffer = await downloadItemMedia(client, item, "image_item");
+			const buffer = await downloadItemMedia(client, item.image_item, "image_item");
 			const name = `image${detectMedia(buffer).ext || ".jpg"}`;
 			return segment.image(b64(buffer), { name });
 		}
 		case 3: {
 			const text = item.voice_item?.text;
 			if (text) return segment.text(text);
-			const buffer = await downloadItemMedia(client, item, "voice_item");
+			const buffer = await downloadItemMedia(client, item.voice_item, "voice_item");
 			return segment.record(b64(buffer));
 		}
 		case 4: {
 			const name = item.file_item?.file_name || "file";
 			if (!cfg.downloadFile) return segment.text(`[文件: ${name}]`);
-			const buffer = await downloadItemMedia(client, item, "file_item");
+			const buffer = await downloadItemMedia(client, item.file_item, "file_item");
 			return segment.file(b64(buffer), { name });
 		}
 		case 5: {
-			const buffer = await downloadItemMedia(client, item, "video_item");
+			const buffer = await downloadItemMedia(client, item.video_item, "video_item");
 			return segment.video(b64(buffer));
 		}
 		case 11:
@@ -611,9 +621,10 @@ const collectRefs = (itemList = []) => {
 	const walk = (ref) => {
 		if (!ref) return;
 		if (!messageId) messageId = ref.message_id || ref.msg_id || ref.svr_id || ref.client_id || "";
-		if (ref.message_item) {
-			items.push(ref.message_item);
-			walk(ref.message_item?.ref_msg);
+		const item = ref.message_item;
+		if (item) {
+			items.push(item);
+			walk(item.ref_msg);
 		}
 	};
 	for (const item of itemList) walk(item?.ref_msg);
@@ -636,32 +647,30 @@ const applyPartial = (elements, ref) => {
 const parseItems = async (cfg, client, itemList = [], lookupRef) => {
 	const quote = collectRefs(itemList);
 	const elements = [];
-	if (quote.items.length) {
-		elements.push(segment.reply(quote.messageId));
-		for (const item of [...quote.items, ...itemList]) {
+	/** 解析条目并追加有效元素 */
+	const append = async (items) => {
+		for (const item of items) {
 			const element = await parseItem(cfg, client, item);
 			if (element) elements.push(element);
 		}
-	} else if (quote.messageId && lookupRef) {
+	};
+	if (quote.items.length) {
+		elements.push(segment.reply(quote.messageId));
+		await append([...quote.items, ...itemList]);
+	} else if (lookupRef) {
 		/** 新版客户端引用只携带 svr_id 从本地缓存还原引用内容 */
 		const cached = applyPartial(lookupRef(quote.messageId), itemList[0]?.ref_msg || {});
 		if (cached.length) {
 			elements.push(segment.reply(quote.messageId));
 			elements.push(...cached);
 		}
-		for (const item of itemList) {
-			const element = await parseItem(cfg, client, item);
-			if (element) elements.push(element);
-		}
+		await append(itemList);
 		return {
 			elements,
 			quoteId: quote.messageId
 		};
 	} else {
-		for (const item of itemList) {
-			const element = await parseItem(cfg, client, item);
-			if (element) elements.push(element);
-		}
+		await append(itemList);
 	}
 	return {
 		elements,
@@ -725,7 +734,7 @@ const toBatches = async (client, peerId, elements, nodes = []) => {
 		try {
 			batches.push([await uploadElement(client, peerId, file, kind, name || fallback)]);
 		} catch (error) {
-			logger.error(`[微信个人号] ${label}上传失败: ${error.message}`);
+			logger.error(`[微信Claw] ${label}上传失败: ${error.message}`);
 		}
 	};
 	for (const element of elements) {
@@ -833,7 +842,7 @@ const state = {
 		try {
 			return await redis.hGet(hashKey(botId), "syncBuf") || "";
 		} catch (error) {
-			logger.error(`[微信个人号] 读取 syncBuf 失败: ${error.message}`);
+			logger.error(`[微信Claw] 读取 syncBuf 失败: ${error.message}`);
 			return "";
 		}
 	},
@@ -848,7 +857,7 @@ const state = {
 		try {
 			return await redis.hGet(hashKey(botId), `context:${userId}`) || "";
 		} catch (error) {
-			logger.error(`[微信个人号] 读取 contextToken 失败: ${error.message}`);
+			logger.error(`[微信Claw] 读取 contextToken 失败: ${error.message}`);
 			return "";
 		}
 	},
@@ -904,7 +913,7 @@ const state = {
 			}
 			return contacts;
 		} catch (error) {
-			logger.error(`[微信个人号] 读取联系人失败: ${error.message}`);
+			logger.error(`[微信Claw] 读取联系人失败: ${error.message}`);
 			return [];
 		}
 	},
@@ -917,7 +926,7 @@ const state = {
 
 //#endregion
 //#region src/adapter/bot.ts
-/** 微信个人号适配器 */
+/** 微信Claw适配器 */
 var WechatAdapter = class extends AdapterBase {
 	/** 停止标志 */
 	stop = false;
@@ -967,10 +976,9 @@ var WechatAdapter = class extends AdapterBase {
 	/** 停止轮询并注销 */
 	async destroy() {
 		this.stop = true;
-		/** 通知服务端下线 */
-		await this.client.notify(false).catch(() => {});
-		await sleep(1e3);
 		unregisterBot("index", this.adapter.index);
+		/** 通知服务端下线 不阻塞 */
+		this.client.notify(false).catch(() => {});
 	}
 	/** 下线通知 */
 	async offlineNotice(message) {
@@ -999,7 +1007,7 @@ var WechatAdapter = class extends AdapterBase {
 				const syncBuf = await state.getSyncBuf(this.selfId);
 				const result = await this.client.getUpdates(syncBuf, pollTimeout);
 				pollTimeout = result.longpolling_timeout_ms || this.#cfg.longPollTimeout;
-				if (errors >= 3) logger.bot("info", this.selfId, `[微信个人号] 网络恢复 (共重试${errors}次)`);
+				if (errors >= 3) logger.bot("info", this.selfId, `[微信Claw] 网络恢复 (共重试${errors}次)`);
 				errors = 0;
 				/** 全部处理成功后才推进游标 避免处理失败丢消息 */
 				for (const msg of result.msgs || []) {
@@ -1021,7 +1029,7 @@ var WechatAdapter = class extends AdapterBase {
 				const ms = Math.min(errors * 5e3, 3e5);
 				/** 前3次逐条报 之后每10次汇总一条 避免刷屏 */
 				if (errors <= 3 || errors % 10 === 0) {
-					logger.bot("warn", this.selfId, `[微信个人号] 轮询断开 (第${errors}次重连 休眠${ms / 1e3}s): ${message}`);
+					logger.bot("warn", this.selfId, `[微信Claw] 轮询断开 (第${errors}次重连 休眠${ms / 1e3}s): ${message}`);
 				}
 				await sleep(ms);
 			}
@@ -1077,12 +1085,12 @@ var WechatAdapter = class extends AdapterBase {
 			this.#cache.delete(first);
 		}
 		history.save(this.selfId, raw).catch((error) => {
-			logger.bot("warn", this.selfId, `[微信个人号] 保存历史消息失败: ${error.message}`);
+			logger.bot("warn", this.selfId, `[微信Claw] 保存历史消息失败: ${error.message}`);
 		});
 	}
 	/** 发送消息 */
 	async sendMsg(contact, elements, retryCount = 0) {
-		if (contact.scene !== "friend") throw new Error("微信个人号仅支持好友私聊");
+		if (contact.scene !== "friend") throw new Error("微信Claw仅支持好友私聊");
 		const peerId = contact.peer;
 		const contextToken = await state.getContext(this.selfId, peerId);
 		if (!contextToken) {
@@ -1101,7 +1109,7 @@ var WechatAdapter = class extends AdapterBase {
 			}
 			const messageId = String(results[0]?.msg?.message_id || results[0]?.message_id || uuid().slice(0, 20));
 			if (this.#cfg.debug) {
-				logger.bot("debug", this.selfId, `[微信个人号] 发送消息: ${sanitizeLog(JSON.stringify(results))}`);
+				logger.bot("debug", this.selfId, `[微信Claw] 发送消息: ${sanitizeLog(JSON.stringify(results))}`);
 			}
 			/** 发送的消息也存入历史 */
 			this.#cacheMessage({
@@ -1189,18 +1197,21 @@ var WechatAdapter = class extends AdapterBase {
 			return { filePath };
 		}
 		if (!options?.url) throw new Error("downloadFile 需要 url 或 base64");
-		const response = await fetch(options.url);
-		if (!response.ok) throw new Error(`下载文件失败: HTTP ${response.status}`);
-		const buffer = Buffer.from(await response.arrayBuffer());
+		const response = await http({
+			url: options.url,
+			method: "get",
+			responseType: "arraybuffer"
+		}, "下载文件失败");
+		const buffer = Buffer.from(response.data);
 		const ext = path.extname(new URL(options.url).pathname) || ".bin";
 		const fileName = options.fileName || `${createHash("md5").update(buffer).digest("hex")}${ext}`;
 		const filePath = path.join(root, fileName);
 		await writeFile(filePath, buffer);
 		return { filePath };
 	}
-	/** 微信个人号不支持撤回消息 */
+	/** 微信Claw不支持撤回消息 */
 	async recallMsg() {
-		throw new Error("微信个人号协议不支持撤回消息");
+		throw new Error("微信Claw协议不支持撤回消息");
 	}
 	/** 获取消息 提供 messageId 时查缓存和历史文件未提供时返回该会话最新一条 */
 	async getMsg(contact, messageId) {
@@ -1221,9 +1232,9 @@ var WechatAdapter = class extends AdapterBase {
 	async getAvatarUrl(userId = this.selfId) {
 		return userId === this.selfId ? this.#cfg.botAvatar : this.#cfg.userAvatar;
 	}
-	/** 微信个人号不支持群聊 */
+	/** 微信Claw不支持群聊 */
 	async getGroupAvatarUrl() {
-		throw new Error("微信个人号不支持群聊");
+		throw new Error("微信Claw不支持群聊");
 	}
 	/** 获取陌生人信息 */
 	async getStrangerInfo(targetId) {
@@ -1243,21 +1254,21 @@ var WechatAdapter = class extends AdapterBase {
 			nick: contact.name
 		}));
 	}
-	/** 微信个人号不支持群聊 返回空列表 */
+	/** 微信Claw不支持群聊 返回空列表 */
 	async getGroupList() {
 		return [];
 	}
-	/** 微信个人号不支持群聊 */
+	/** 微信Claw不支持群聊 */
 	async getGroupInfo(_groupId) {
-		throw new Error("微信个人号不支持群聊");
+		throw new Error("微信Claw不支持群聊");
 	}
-	/** 微信个人号不支持群聊 返回空列表 */
+	/** 微信Claw不支持群聊 返回空列表 */
 	async getGroupMemberList(_groupId) {
 		return [];
 	}
-	/** 微信个人号不支持群聊 */
+	/** 微信Claw不支持群聊 */
 	async getGroupMemberInfo(_groupId, targetId) {
-		throw new Error(`微信个人号不支持群聊 (${targetId})`);
+		throw new Error(`微信Claw不支持群聊 (${targetId})`);
 	}
 	/** 发送"正在输入"状态 返回ownerId 供 stopTyping 使用 */
 	async sendTyping(peerId) {
@@ -1288,7 +1299,7 @@ var WechatAdapter = class extends AdapterBase {
 				}
 				await this.client.sendTypingState(peerId, typing.ticket);
 			} catch (error) {
-				logger.bot("error", this.selfId, `[微信个人号] 发送正在输入状态失败: ${error.message}`);
+				logger.bot("error", this.selfId, `[微信Claw] 发送正在输入状态失败: ${error.message}`);
 			}
 		};
 		await perform();
@@ -1346,7 +1357,7 @@ var Manager = class {
 			/** 新增或重新启用的账号 连接 */
 			for (const account of config().accounts) {
 				if (!account.token || account.isDisable || this.bots.has(account.botId) || this.#connecting.has(account.botId)) continue;
-				tasks.push(this.connect(account).then(() => sleep(2e3)));
+				tasks.push(this.connect(account));
 			}
 			if (!tasks.length) return;
 			await Promise.all(tasks);
@@ -1379,21 +1390,9 @@ var Manager = class {
 	async load() {
 		const accounts = config().accounts.filter((a) => a.token && !a.isDisable && !this.bots.has(a.botId));
 		if (!accounts.length) return;
-		const results = await Promise.all(accounts.map((account) => this.connect(account).then((result) => ({
-			account,
-			...result
-		}))));
-		const failed = results.filter((result) => result.needLogin);
-		if (failed.length) {
-			for (const { account, error } of failed) {
-				logger.mark(`[微信个人号] [${account.nickname || account.botId}] 凭证已失效，请发送 #微信登录 重新扫码 (${error})`);
-				account.token = "";
-				account.isDisable = true;
-			}
-			saveConfig({ accounts: config().accounts });
-		}
+		await Promise.all(accounts.map((account) => this.connect(account)));
 	}
-	/** 连接账号 验证凭证后创建适配器 */
+	/** 连接账号 直接创建适配器 凭证失效由轮询循环下线处理兜底 */
 	async connect(account) {
 		if (!account.token) return {
 			needLogin: true,
@@ -1403,31 +1402,7 @@ var Manager = class {
 		if (this.#connecting.has(account.botId) || this.bots.has(account.botId)) return { success: true };
 		this.#connecting.add(account.botId);
 		try {
-			const cfg = config();
-			const client = new WechatClient({
-				cfg,
-				token: account.token,
-				baseUrl: account.baseUrl
-			});
-			try {
-				const syncBuf = await state.getSyncBuf(account.botId);
-				/** 短超时验证凭证 服务器未拒绝即放行 避免长轮询挂住连接流程 */
-				await client.getUpdates(syncBuf, 3e3);
-			} catch (error) {
-				const message = error.message || "";
-				if (isTokenInvalid(error)) return {
-					needLogin: true,
-					error: message
-				};
-				/** 网络波动时放行 交给轮询循环重连 */
-				if (!/timeout|ECONNRESET|fetch failed|AbortError/i.test(message)) {
-					return {
-						needLogin: true,
-						error: `凭证验证失败: ${message}`
-					};
-				}
-			}
-			await this.#create(account, cfg);
+			await this.#create(account, config());
 			return { success: true };
 		} finally {
 			this.#connecting.delete(account.botId);
@@ -1465,15 +1440,15 @@ var Manager = class {
 			saveConfig({ accounts: config().accounts });
 		}
 		await this.destroy(botId);
-		logger.mark(`[微信个人号] ${botId} 已下线: ${message}`);
 	}
-	/** 扫码登录 input 为序号时重登指定账号 保留其 botId 与数据 */
-	async login(e, input) {
+	/** 扫码登录 消息带序号时重登指定账号 保留其 botId 与数据 */
+	async login(e) {
 		let target;
-		if (input) {
-			target = this.findAccount(input.trim()).account;
+		const seq = e.msg.match(/^#?[cC][lL][aA][wW]登录\s*(\d+)$/)?.[1];
+		if (seq) {
+			target = this.findAccount(seq).account;
 			if (!target) {
-				await e.reply("未找到该账号，用 #微信账号列表 查看序号");
+				await e.reply("未找到该账号，用 #Claw账号列表 查看序号");
 				return false;
 			}
 		}
@@ -1497,9 +1472,7 @@ var Manager = class {
 			let status;
 			try {
 				status = await client.pollQRStatus(qr.qrcode);
-			} catch (error) {
-				const message = error.message || "";
-				if (!/timeout/i.test(message)) logger.error(`[微信个人号] 轮询二维码状态失败: ${message}`);
+			} catch {
 				continue;
 			}
 			if (status.status === "expired") {
@@ -1517,7 +1490,8 @@ var Manager = class {
 				baseurl
 			}, target);
 			const result = await this.connect(account);
-			await e.reply(result.success ? `微信个人号登录成功: ${account.nickname}` : `凭证已保存 但连接失败: ${result.error || "未知错误"}`);
+			if (!result.success) throw new Error(result.error);
+			await e.reply(`微信Claw登录成功: ${account.nickname}`);
 			return true;
 		}
 		await e.reply("登录超时，请重新尝试");
@@ -1528,16 +1502,11 @@ var Manager = class {
 		const link = qr.qrcode_img_content;
 		/** 终端适配器直接在终端打印二维码 */
 		if (e.bot.adapter.protocol === "console") {
-			try {
-				const terminal = await QRCode.toString(link, {
-					type: "terminal",
-					small: true
-				});
-				process.stdout.write(`\n请使用微信扫码登录:\n${terminal}\n`);
-			} catch (error) {
-				logger.error(`[微信个人号] 终端输出二维码失败: ${error.message}`);
-			}
-			await e.reply(`请扫码登录 或访问链接: ${link}`);
+			const terminal = await QRCode.toString(link, {
+				type: "terminal",
+				small: true
+			});
+			process.stdout.write(`\n请使用微信扫码登录:\n${terminal}\n${link}\n`);
 			return;
 		}
 		try {
@@ -1568,7 +1537,7 @@ var Manager = class {
 				token: status.bot_token,
 				accountId: status.ilink_bot_id || "",
 				userId: status.ilink_user_id,
-				nickname: status.nickname || `微信ClawBot${accounts.length + 1}`,
+				nickname: status.nickname || `微信Claw${accounts.length + 1}`,
 				baseUrl: status.baseurl
 			});
 		}
@@ -1578,17 +1547,17 @@ var Manager = class {
 	/** 账号列表文本 */
 	listText() {
 		const accounts = config().accounts;
-		if (!accounts.length) return "暂无账号，用 #微信登录 添加";
+		if (!accounts.length) return "暂无账号，用 #Claw登录 添加";
 		const list = accounts.map((account, index) => {
 			const status = account.isDisable ? "已禁用" : this.bots.has(account.botId) ? "在线" : "离线";
 			return `${index + 1}. ${account.nickname || account.botId} [${status}]\n   ${account.userId}`;
 		});
-		return `微信个人号账号列表:\n${list.join("\n")}\n\n指令: #微信登录 | #微信登录[序号] 重登 | #微信删除[序号] | #微信禁用/启用[序号]`;
+		return `微信Claw账号列表:\n${list.join("\n")}`;
 	}
 	/** 删除账号 */
 	async removeAccount(input) {
 		const { account } = this.findAccount(input);
-		if (!account) return "未找到账号，用 #微信账号列表 查看";
+		if (!account) return "未找到账号，用 #Claw账号列表 查看";
 		const name = account.nickname || account.botId;
 		await this.remove(account);
 		return `已删除 ${name}，剩余 ${config().accounts.length} 个账号`;
@@ -1596,7 +1565,7 @@ var Manager = class {
 	/** 禁用/启用账号 */
 	async toggleAccount(input, disable) {
 		const { account, accounts } = this.findAccount(input);
-		if (!account) return "未找到账号，用 #微信账号列表 查看";
+		if (!account) return "未找到账号，用 #Claw账号列表 查看";
 		if (account.isDisable === disable) return `账号已是${disable ? "禁用" : "启用"}状态`;
 		if (disable) await this.destroy(account.botId);
 		account.isDisable = disable;

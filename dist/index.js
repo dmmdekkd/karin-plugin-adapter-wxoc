@@ -1,5 +1,5 @@
 import { dir } from "./dir.js";
-import { t as manager } from "./adapter-CkuglFLk.js";
+import { t as manager } from "./adapter-Zr1Opu1S.js";
 import { logger } from "node-karin";
 
 //#region src/index.ts

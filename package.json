@@ -59,6 +59,7 @@
     "karin-plugin-botweb": "^1.0.15",
     "karin-plugin-ling": "^1.34.8",
     "karin-plugin-qbot": "^1.0.11",
+    "node-schedule": "2.1.1",
     "qrcode": "^1.5.4"
   }
 }

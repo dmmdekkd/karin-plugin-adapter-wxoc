@@ -1,8 +1,20 @@
 import { dir } from "./dir.js";
 import path from "node:path";
 import { copyConfigSync, requireFileSync } from "node-karin";
+import crypto from "node:crypto";
 import fs from "node:fs";
 
+//#region src/utils/common.ts
+/** 睡眠函数
+* @param ms 毫秒
+*/
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** 生成无连字符的随机UUID */
+const uuid = () => crypto.randomUUID().replaceAll("-", "");
+/** 生成消息ID */
+const msgId = () => `${Date.now()}${Math.floor(Math.random() * 1e3)}`;
+
+//#endregion
 //#region src/utils/config.ts
 const configFile = path.join(dir.ConfigDir, "config.json");
 /** 初始化配置文件 */
@@ -25,4 +37,4 @@ const saveConfig = (cfg) => {
 };
 
 //#endregion
-export { saveConfig as n, config as t };
+export { uuid as a, sleep as i, saveConfig as n, msgId as r, config as t };
